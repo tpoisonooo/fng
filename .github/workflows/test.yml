@@ -1,0 +1,37 @@
+name: test
+
+on: [push, pull_request]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install torch (CPU build)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install package and pytest
+        run: pip install -e . pytest
+      - name: Run tests
+        run: pytest -v
+      - name: Smoke-run the FFN comparison example
+        run: python fng_vs_ffn.py
+
+  triton-cpu:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install torch (CPU build)
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install package and pytest
+        run: pip install -e . pytest
+      - name: Install triton-cpu wheel
+        run: >
+          pip install "https://github.com/triton-lang/triton-cpu/releases/download/v3.8.0/triton-3.8.0%2Bcpu-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+      - name: Run tests including the Triton kernel
+        run: TRITON_DEFAULT_BACKEND=cpu pytest -v

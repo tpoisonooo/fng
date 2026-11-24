@@ -1,0 +1,5 @@
+torch>=2.0
+# Optional, only for the fused ladder kernel (fng_triton.py / cofrgenet_fng.triton_ladder):
+# - GPU: pip install triton
+# - CPU: wheel from https://github.com/triton-lang/triton-cpu/releases
+#   then run with TRITON_DEFAULT_BACKEND=cpu

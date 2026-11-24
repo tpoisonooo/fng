@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cofrgenet-fng"
+version = "0.1.0"
+description = "Unofficial PyTorch implementation of CoFrGeNet-FNG: non-expanding gated continued-fraction feed-forward layers (arXiv:2611.26835)"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["torch>=2.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.urls]
+Repository = "https://github.com/konghuanjun/cofrgenet-fng"
+Paper = "https://arxiv.org/abs/2611.26835"
+
+[tool.setuptools]
+packages = ["cofrgenet_fng"]

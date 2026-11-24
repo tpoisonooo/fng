@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# local environments and downloaded toolchains
+.venv/
+third_party/
+*.whl
