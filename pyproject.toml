@@ -15,7 +15,7 @@ dependencies = ["torch>=2.0"]
 test = ["pytest>=7"]
 
 [project.urls]
-Repository = "https://github.com/tpoisonooo/cofrgenet-fng"
+Repository = "https://github.com/tpoisonooo/fng"
 Paper = "https://arxiv.org/abs/2611.26835"
 
 [tool.setuptools]
