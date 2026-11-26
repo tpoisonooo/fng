@@ -1,0 +1,148 @@
+# CoFrGeNet-FNG（非官方 PyTorch 实现）
+
+[English](README.md) | 简体中文
+
+IBM Research 论文 [Non-Expanding Gated Continued Fraction Architecture for
+Feedforward Layers in Language Models](https://arxiv.org/abs/2611.26835)
+（NeurIPS 2026）中 **CoFrGeNet-FNG** —— *Non-Expanding Gated Continued
+Fraction* 前馈层 —— 的非官方 PyTorch 实现，附带经典 FFN 基线和一个用于
+连分数梯子的 Triton 融合 kernel。
+
+> **说明：** 本仓库是独立按论文复现的实现。作者官方仓库
+> [IBM/CoFrNets](https://github.com/IBM/CoFrNets) 在本文撰写时尚未放出代码。
+
+## CoFrGeNet-FNG 是什么？
+
+它是 transformer（以及 SSM / MoE）block 中 FFN 子层的**直接替代品**
+（drop-in replacement），API 同样是 `(…, p) -> (…, p)`，但参数量约为
+原来的 1/4：
+
+1. **非扩展门控投影**：`x ∈ R^p → z ∈ R^p`（扩展因子 α = 1），计算方式为
+   `z = a ⊙ silu(b)`，其中 `[a, b]` 是一次线性映射后切两半得到的
+   —— 共 2p² 个参数。
+2. **L 条深度为 d 的连分数"梯子"**：每条梯子有 d+1 个可学习的系数向量，
+   a_k = w_kᵀz，计算有理函数
+
+   ```
+   f~(a_1..a_d) = 1/(a_1 + 1/(a_2 + ... + 1/a_d))
+   ```
+
+   通过 continuant（连分式多项式）递推（论文 eqs. 3–6）求值，每条梯子
+   只需 **1 次**除法而不是 d 次。
+3. **log/exp 除法**（论文 eq. 8）：把剩下的这次除法改写成
+   `sgn·sgn·exp(log|num| − log max(|den|, ε))`，使得深层梯子（d > 1）
+   的训练保持稳定，**无需**原版 CoFrGeNet 所要求的增量训练（incremental
+   training）流程。
+4. 一个线性投影 `R^L → R^p`。
+
+参数量：`2p² + L·p·(d+1) + L·p`，而 vanilla FFN 为 `2αp²`，SwiGLU 为
+`3αp²`（α ≥ 2）。
+
+## 安装
+
+```bash
+pip install -e .          # 唯一硬依赖是 torch
+```
+
+可选：融合 Triton 梯子 kernel：
+
+```bash
+# GPU
+pip install triton
+# CPU（实验性 triton-cpu 后端，按你的平台和 Python 版本选择）
+pip install "https://github.com/triton-lang/triton-cpu/releases/download/v3.8.0/triton-3.8.0%2Bcpu-cp312-abi3-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl"
+```
+
+注意：triton-cpu 的 wheel 要**最后**安装。torch 会固定（pin）自己的
+triton 版本，之后再执行任何触及 torch 依赖的 `pip install`，都可能把
+`+cpu` wheel 替换回 mainline triton（没有 CPU 后端）。
+
+## 快速上手
+
+```python
+import torch
+from cofrgenet_fng import CoFrGeNetFNG
+
+ffn = CoFrGeNetFNG(p=768, n_ladders=5, depth=5)   # 与 FFN 相同的 API
+x = torch.randn(2, 128, 768)
+y = ffn(x)                                        # (2, 128, 768)
+
+sum(t.numel() for t in ffn.parameters())          # 1,208,862（vanilla FFN 为 4.7M）
+```
+
+## 示例
+
+在仓库根目录下运行。
+
+### `fng_vs_ffn.py` —— FNG 对比 FFN 基线
+
+先验证 continuant 数学正确性，再对比参数量、速度和师生（teacher-student）
+拟合能力。在 8 核 CPU（torch 2.9.1）上实测：
+
+```
+module                             params   vs FFN    fwd+bwd
+VanillaFFN (alpha=4)            4,722,432    1.00x   259.90 ms
+SwiGLUFFN (alpha=8/3)           4,723,456    1.00x   234.54 ms
+CoFrGeNetFNG (L=5, d=5)         1,208,862    0.26x    69.60 ms
+CoFrGeNetFNG (L=8, d=8)         1,243,464    0.26x    74.09 ms
+```
+
+在这个玩具拟合任务上，FNG 用 1/3 的参数量但收敛比全尺寸 FFN 慢——这与
+论文一致：论文中持平或更优的结果是语言模型预训练规模下的结论，而不是
+小型回归任务。
+
+### `fng_triton.py` —— Triton 融合梯子 kernel
+
+梯子在 eager PyTorch 里是一串串行的小 elementwise 算子；kernel 把它融合成
+一次 pointwise 遍历（读入 d+1 个系数，在寄存器里跑 continuant 递推，一次
+log/exp 除法，写出结果）。仅实现前向；训练路径仍以 eager 版本为准。
+triton-cpu 后端实测（共享 CPU 上数字逐次运行有波动；稳定的是梯子级别的
+加速——在整 block 层面，p→2p 的 GEMM 占主导，差异在噪声范围内）：
+
+```
+(B=16, S=256, L=8, d=8)  N=32,768 条梯子:      eager 0.679 ms | triton 0.164 ms (4.13x)
+(B=64, S=1024, L=16, d=8) N=1,048,576 条梯子:  eager 16.262 ms | triton 5.945 ms (2.74x)
+```
+
+运行方式：`TRITON_DEFAULT_BACKEND=cpu python fng_triton.py`（GPU 上直接
+`python fng_triton.py`）。
+
+## 测试
+
+```bash
+pip install pytest
+pytest -v          # 未安装 triton 时相关测试自动跳过
+```
+
+## 仓库结构
+
+```
+cofrgenet_fng/        包本体
+  layers.py           VanillaFFN、SwiGLUFFN、CoFrGeNetFNG、continuant_fraction
+  triton_ladder.py    融合 Triton kernel（可选，仅前向）
+fng_vs_ffn.py         示例：FNG 对比 FFN 基线
+fng_triton.py         示例：Triton kernel 正确性 + 基准测试
+tests/                pytest 测试套件
+```
+
+## 引用
+
+```bibtex
+@article{dhurandhar2026cofrgenetfng,
+  title   = {Non-Expanding Gated Continued Fraction Architecture for Feedforward Layers in Language Models},
+  author  = {Dhurandhar, Amit and Chenthamarakshan, Vijil and Ramamurthy, Karthikeyan Natesan and Wei, Dennis and Nair, Rahul},
+  journal = {arXiv:2611.26835},
+  year    = {2026}
+}
+
+@inproceedings{dhurandhar2026cofrgenet,
+  title     = {CoFrGeNet: Continued Fraction Architectures for Language Generation},
+  author    = {Dhurandhar, A. and Chenthamarakshan, V. and Wei, D. and Pedapati, T. and Ramamurthy, K. N. and Nair, R.},
+  booktitle = {Proceedings of the 43rd International Conference on Machine Learning (ICML)},
+  year      = {2026}
+}
+```
+
+## 许可证
+
+MIT —— 见 [LICENSE](LICENSE)。

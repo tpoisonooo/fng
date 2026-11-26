@@ -1,5 +1,7 @@
 # CoFrGeNet-FNG (unofficial PyTorch implementation)
 
+English | [简体中文](README.zh-CN.md)
+
 Unofficial PyTorch implementation of **CoFrGeNet-FNG** — the *Non-Expanding
 Gated Continued Fraction* feed-forward layer from IBM Research's paper
 [Non-Expanding Gated Continued Fraction Architecture for Feedforward Layers
