@@ -68,6 +68,10 @@ FNG 用四步替代这条路，核心思想是：**FFN 靠"升维摊开 + 激活
 
 ![连分数梯子](docs/ladder.jpg)
 
+> 进一步："FNG 表达力更强"能不能不靠实验、从数学上证明？能证明什么、
+> 证明不了什么，见 [docs/theory.md](docs/theory.md)（命题 + 证明思路 +
+> 参考文献）。
+
 ## 安装
 
 ```bash
@@ -153,7 +157,7 @@ cofrgenet_fng/        包本体
 fng_vs_ffn.py         示例：FNG 对比 FFN 基线
 fng_triton.py         示例：Triton kernel 正确性 + 基准测试
 tests/                pytest 测试套件
-docs/                 README 配图（make_figures.py 可重新生成）
+docs/                 README 配图（make_figures.py 可重新生成）+ theory.md 理论分析
 ```
 
 ## 引用
