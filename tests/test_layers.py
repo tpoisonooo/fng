@@ -4,9 +4,11 @@ import torch
 from cofrgenet_fng import (
     HAS_TRITON,
     CoFrGeNetFNG,
+    CoFrGeNetFNGTriton,
     SwiGLUFFN,
     VanillaFFN,
     continuant_fraction,
+    ladder_apply,
     ladder_forward,
 )
 
@@ -83,3 +85,79 @@ def test_triton_ladder_matches_eager(d):
     # so judge by relative error with a depth-tolerant bound
     err = ((ref - got).abs() / ref.abs().clamp_min(1.0)).max().item()
     assert err < 1e-3
+
+
+@pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
+@pytest.mark.parametrize("d", [1, 2, 5, 8])
+@pytest.mark.parametrize("eps", [0.1, 2.0])  # 2.0 exercises the clamped branch
+def test_triton_backward_matches_eager(d, eps):
+    torch.manual_seed(0)
+    c = (torch.randn(64, 8, d + 1) * 1.5).requires_grad_(True)
+    c_ref = c.detach().clone().requires_grad_(True)
+    g = torch.randn(64, 8)
+
+    # eager reference (autograd through continuant recursion + log/exp)
+    out_ref = c_ref[..., 0] + continuant_fraction(c_ref[..., 1:], eps=eps)
+    out_ref.backward(g)
+
+    # fused triton forward + backward
+    out = ladder_apply(c, eps=eps)
+    assert torch.allclose(out, out_ref, rtol=1e-3, atol=1e-3)
+    out.backward(g)
+
+    assert torch.isfinite(c.grad).all()
+    err = ((c.grad - c_ref.grad).abs() / c_ref.grad.abs().clamp_min(1.0)).max()
+    assert err < 1e-3, err
+
+
+@pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
+@pytest.mark.parametrize("d", [1, 2, 5, 8])
+def test_triton_backward_clamped_denominator(d):
+    """Tiny nonzero coefficients: |den| << eps exercises the clamp branch."""
+    c = torch.randn(128, 4, d + 1).requires_grad_(True)
+    with torch.no_grad():
+        c[..., 1:] *= 1e-6
+    c_ref = c.detach().clone().requires_grad_(True)
+    g = torch.randn(128, 4)
+
+    (c_ref[..., 0] + continuant_fraction(c_ref[..., 1:], eps=0.1)).backward(g)
+    ladder_apply(c, eps=0.1).backward(g)
+
+    assert torch.isfinite(c.grad).all()
+    assert torch.allclose(c.grad, c_ref.grad, rtol=1e-3, atol=1e-3)
+
+
+@pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
+def test_triton_backward_at_zero_numerator():
+    """d=2, a1=a2=0 -> num=a2=0, den=1, so frac=a2 and d frac/d a2 = 1.
+    (eager autograd returns 0 at a2=0 only because torch.abs(0).grad == 0;
+    the analytic adjoint gives the true derivative of num / den_c.)"""
+    c = torch.zeros(16, 4, 3, requires_grad=True)
+    g = torch.randn(16, 4)
+    ladder_apply(c, eps=0.1).backward(g)
+    assert torch.allclose(c.grad[..., 0], g)
+    assert torch.allclose(c.grad[..., 1], torch.zeros_like(g))
+    assert torch.allclose(c.grad[..., 2], g)
+
+
+@pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
+def test_triton_module_matches_eager_module():
+    torch.manual_seed(0)
+    eager = CoFrGeNetFNG(64, n_ladders=8, depth=5)
+    fast = CoFrGeNetFNGTriton(64, n_ladders=8, depth=5)
+    fast.load_state_dict(eager.state_dict())
+
+    x = torch.randn(16, 7, 64)
+    y_ref = eager(x)
+    y = fast(x)
+    assert torch.allclose(y, y_ref, rtol=1e-3, atol=1e-3)
+
+    y_ref.pow(2).mean().backward()
+    y.pow(2).mean().backward()
+    for (n1, p1), (n2, p2) in zip(eager.named_parameters(), fast.named_parameters()):
+        assert n1 == n2
+        assert p1.grad is not None and p2.grad is not None, n1
+        assert torch.allclose(p1.grad, p2.grad, rtol=1e-2, atol=1e-4), (
+            n1,
+            (p1.grad - p2.grad).abs().max().item(),
+        )

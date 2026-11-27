@@ -1,14 +1,31 @@
-"""Fused Triton kernel for the CoFrGeNet-FNG continued-fraction ladders.
+"""Fused Triton forward + backward kernels for CoFrGeNet-FNG ladders.
 
 The ladder part of the FNG block is a poor fit for eager PyTorch: a serial
 loop of d tiny elementwise kernels plus a chain of sign/abs/log/exp ops.
-Each (batch, seq) position is independent, so the whole thing fuses into a
-single pointwise kernel: load d+1 coefficients, run the continuant
-recursion in registers, one fused log/exp "division" (paper eq. 8), store
-L outputs.
+Each (batch, seq) position is independent, so both directions fuse into
+single pointwise kernels.
 
-Backward is not implemented (forward-only kernel); the eager path in
-cofrgenet_fng.layers stays the training reference.
+Forward: out = a0 + frac, where frac = K_{d-1} / K_d evaluated by the
+continuant recursion (1 division, paper eqs. 3-6) with the log/exp division
+and clamped denominator (paper eq. 8):
+
+    frac = num / den_c,   num = K_{d-1}, den = K_d,
+    den_c = sgn(den) * max(|den|, eps)
+
+Backward (analytic adjoint, also division-free):
+
+    dnum = g * sgn(den) * exp(-log max(|den|, eps))
+    dden = -g * frac * sgn(den) * exp(-log max(|den|, eps))   if |den| >= eps
+           0                                                  otherwise
+
+    then backprop through K_k = a_{d-k+1} K_{k-1} + K_{k-2} in reverse:
+    for k = d .. 2:
+        d a_{d-k+1} = A1 * km1_old
+        (A2, A1)    = (A1, A1 * a + A2)
+    d a_d = A1,  d a_0 = g
+
+Since Triton jit has no register arrays, km1_old is recomputed per step
+(O(d^2) scalar ops in registers; d <= 8, negligible next to exp/log).
 
 Backend selection (at import time):
   * CUDA available     -> kernels launch on GPU
@@ -22,6 +39,9 @@ Backend selection (at import time):
 import os
 
 import torch
+import torch.nn.functional as F
+
+from .layers import CoFrGeNetFNG
 
 try:
     import triton
@@ -33,7 +53,14 @@ except ImportError:  # pragma: no cover - depends on environment
     tl = None
     HAS_TRITON = False
 
-__all__ = ["HAS_TRITON", "ladder_forward", "triton_backend"]
+__all__ = [
+    "HAS_TRITON",
+    "triton_backend",
+    "ladder_forward",
+    "ladder_backward",
+    "ladder_apply",
+    "CoFrGeNetFNGTriton",
+]
 
 
 def triton_backend() -> str:
@@ -45,6 +72,14 @@ def triton_backend() -> str:
     if os.environ.get("TRITON_INTERPRET") == "1":
         return "interpreter"
     return "cpu"
+
+
+def _no_triton(*args, **kwargs):
+    raise ImportError(
+        "triton is not installed. Install it (GPU: pip install triton; "
+        "CPU: wheel from github.com/triton-lang/triton-cpu/releases), "
+        "or use cofrgenet_fng.CoFrGeNetFNG instead of CoFrGeNetFNGTriton."
+    )
 
 
 if HAS_TRITON:
@@ -61,6 +96,18 @@ if HAS_TRITON:
     def _sign(x):
         # torch.sign semantics: 0 -> 0 (tl.where keeps it branch-free)
         return tl.where(x > 0, 1.0, tl.where(x < 0, -1.0, 0.0))
+
+    @triton.jit
+    def _frac_logexp(num, den, eps):
+        # frac = num / (sgn(den) * max(|den|, eps)), via log/exp (paper eq. 8)
+        return (
+            _sign(num)
+            * _sign(den)
+            * tl.exp(
+                tl.log(tl.maximum(tl.abs(num), 1e-12))
+                - tl.log(tl.maximum(tl.abs(den), eps))
+            )
+        )
 
     @triton.jit
     def _ladder_kernel(
@@ -81,21 +128,70 @@ if HAS_TRITON:
         Km2 = tl.full((BLOCK,), 1.0, tl.float32)  # K_0
         Km1 = tl.load(base + (D1 - 1), mask=mask, other=0.0)  # K_1 = a_d
         for k in tl.static_range(2, D1):
-            a = tl.load(base + (D1 - k), mask=mask, other=0.0)  # a_{d-k+1}
+            a = tl.load(base + (D1 - k), mask=mask, other=0.0)
             Km2, Km1 = Km1, a * Km1 + Km2
         # Km1 = K_d(a_1..a_d), Km2 = K_{d-1}(a_2..a_d)
 
-        # paper eq. 8: division rewritten as log/exp, denominator clamped
+        tl.store(out_ptr + rows, a0 + _frac_logexp(Km2, Km1, eps), mask=mask)
+
+    @triton.jit
+    def _ladder_bwd_kernel(
+        c_ptr,  # (N, D1) fp32: forward coefficients [a0, a_1, ..., a_d]
+        g_ptr,  # (N,) fp32: upstream grad w.r.t. ladder output
+        dc_ptr,  # (N, D1) fp32: output grads w.r.t. c
+        eps,
+        N,
+        D1: tl.constexpr,
+        BLOCK: tl.constexpr,
+    ):
+        rows = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
+        mask = rows < N
+        base = c_ptr + rows * D1
+        g = tl.load(g_ptr + rows, mask=mask, other=0.0)
+
+        # 1) recompute forward to get num, den, frac (d <= 8: cheap recompute,
+        #    saves storing O(d) activations)
+        Km2 = tl.full((BLOCK,), 1.0, tl.float32)
+        Km1 = tl.load(base + (D1 - 1), mask=mask, other=0.0)  # K_1 = a_d
+        for k in tl.static_range(2, D1):
+            a = tl.load(base + (D1 - k), mask=mask, other=0.0)
+            Km2, Km1 = Km1, a * Km1 + Km2
         num, den = Km2, Km1
-        frac = (
-            _sign(num)
-            * _sign(den)
-            * tl.exp(
-                tl.log(tl.maximum(tl.abs(num), 1e-12))
-                - tl.log(tl.maximum(tl.abs(den), eps))
-            )
+        frac = _frac_logexp(num, den, eps)  # frac = num / den_c
+
+        # 2) adjoint of frac = num / den_c, without explicit divisions
+        log_cap = tl.log(tl.maximum(tl.abs(den), eps))
+        sgn_den = _sign(den)
+        d_num = g * sgn_den * tl.exp(-log_cap)  # g / den_c
+        d_den = tl.where(
+            tl.abs(den) >= eps,
+            -g * frac * sgn_den * tl.exp(-log_cap),  # -g * frac / den_c
+            0.0,
         )
-        tl.store(out_ptr + rows, a0 + frac, mask=mask)
+
+        tl.store(dc_ptr + rows * D1 + 0, g, mask=mask)  # d a_0
+
+        if D1 == 2:
+            # d = 1: num = K_0 = 1 is constant, den = a_1
+            tl.store(dc_ptr + rows * D1 + 1, d_den, mask=mask)
+        else:
+            # 3) reverse adjoint of Km2, Km1 = Km1, a * Km1 + Km2
+            A2, A1 = d_num, d_den
+            for i in range(0, D1 - 2):
+                rev_k = (D1 - 1) - i  # reverse step: d, d-1, ..., 2
+                a = tl.load(base + (D1 - rev_k), mask=mask, other=0.0)
+
+                # recompute state (v2, v1) before step rev_k (steps 2 .. rev_k-1)
+                v2 = tl.full((BLOCK,), 1.0, tl.float32)
+                v1 = tl.load(base + (D1 - 1), mask=mask, other=0.0)
+                for jj in range(0, rev_k - 2):
+                    aj = tl.load(base + (D1 - jj - 2), mask=mask, other=0.0)
+                    v2, v1 = v1, aj * v1 + v2
+
+                d_a = A1 * v1  # grad w.r.t. the coefficient consumed at step rev_k
+                tl.store(dc_ptr + rows * D1 + (D1 - rev_k), d_a, mask=mask)
+                A2, A1 = A1, A1 * a + A2
+            tl.store(dc_ptr + rows * D1 + (D1 - 1), A1, mask=mask)  # d a_d
 
     def ladder_forward(c: torch.Tensor, eps: float = 0.1) -> torch.Tensor:
         """c: (..., L, d+1) coefficients [a0, a_1..a_d] -> (..., L) outputs."""
@@ -109,12 +205,53 @@ if HAS_TRITON:
         )
         return out.reshape(shape[:-1])
 
-else:
-
-    def ladder_forward(c: torch.Tensor, eps: float = 0.1) -> torch.Tensor:
-        raise ImportError(
-            "triton is not installed. Install it (or the CPU backend wheel "
-            "from github.com/triton-lang/triton-cpu/releases) to use "
-            "ladder_forward; the eager equivalent is "
-            "cofrgenet_fng.layers.continuant_fraction."
+    def ladder_backward(
+        c: torch.Tensor, grad_out: torch.Tensor, eps: float = 0.1
+    ) -> torch.Tensor:
+        """Gradient w.r.t. c for ladder_forward; grad_out has shape (..., L)."""
+        shape = c.shape
+        c2 = c.reshape(-1, shape[-1]).contiguous().float()
+        g2 = grad_out.reshape(-1).contiguous().float()
+        dc = torch.empty_like(c2)
+        block = 256
+        _ladder_bwd_kernel[(triton.cdiv(c2.shape[0], block),)](
+            c2, g2, dc, eps, c2.shape[0], D1=shape[-1], BLOCK=block
         )
+        return dc.reshape(shape)
+
+    class _LadderTritonFn(torch.autograd.Function):
+        @staticmethod
+        def forward(ctx, c, eps: float):
+            ctx.save_for_backward(c)
+            ctx.eps = float(eps)
+            return ladder_forward(c, eps)
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            (c,) = ctx.saved_tensors
+            return ladder_backward(c, grad_out, ctx.eps), None
+
+    def ladder_apply(c: torch.Tensor, eps: float = 0.1) -> torch.Tensor:
+        """Differentiable continued-fraction ladder (fused fwd + bwd)."""
+        return _LadderTritonFn.apply(c, eps)
+
+    class CoFrGeNetFNGTriton(CoFrGeNetFNG):
+        """CoFrGeNetFNG whose ladder runs the fused Triton fwd+bwd kernels.
+
+        Same parameters / state_dict as CoFrGeNetFNG; input/output are fp32
+        (the surrounding gate_up, coeffs and down layers stay in autograd)."""
+
+        def forward(self, x):
+            a, b = self.gate_up(x).chunk(2, dim=-1)
+            z = a * F.silu(b)
+            c = self.coeffs(z).unflatten(-1, (self.L, self.d + 1))
+            return self.down(ladder_apply(c, self.eps))
+
+else:
+    ladder_forward = _no_triton
+    ladder_backward = _no_triton
+    ladder_apply = _no_triton
+
+    class CoFrGeNetFNGTriton(CoFrGeNetFNG):
+        def forward(self, x):
+            _no_triton()

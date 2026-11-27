@@ -127,11 +127,12 @@ CoFrGeNetFNG (L=8, d=8)         1,243,464    0.26x    74.09 ms
 
 ### `fng_triton.py` —— Triton 融合梯子 kernel
 
-梯子在 eager PyTorch 里是一串串行的小 elementwise 算子；kernel 把它融合成
-一次 pointwise 遍历（读入 d+1 个系数，在寄存器里跑 continuant 递推，一次
-log/exp 除法，写出结果）。仅实现前向；训练路径仍以 eager 版本为准。
-triton-cpu 后端实测（共享 CPU 上数字逐次运行有波动；稳定的是梯子级别的
-加速——在整 block 层面，p→2p 的 GEMM 占主导，差异在噪声范围内）：
+梯子在 eager PyTorch 里是一串串行的小 elementwise 算子；kernel 把**前向和
+反向**都融合成了 pointwise 遍历（前向：continuant 递推 + 一次 log/exp
+除法；反向：手写解析 adjoint，同样无除法，通过 `ladder_apply` /
+`CoFrGeNetFNGTriton` 接入 autograd）。triton-cpu 后端前向实测（共享 CPU
+上数字逐次运行有波动；稳定的是梯子级别的加速——在整 block 层面，p→2p
+的 GEMM 占主导，差异在噪声范围内）：
 
 ```
 (B=16, S=256, L=8, d=8)  N=32,768 条梯子:      eager 0.679 ms | triton 0.164 ms (4.13x)
@@ -140,6 +141,26 @@ triton-cpu 后端实测（共享 CPU 上数字逐次运行有波动；稳定的�
 
 运行方式：`TRITON_DEFAULT_BACKEND=cpu python fng_triton.py`（GPU 上直接
 `python fng_triton.py`）。
+
+### `mnist_train.py` —— MNIST 前向+反向训练测试
+
+在 CPU 上端到端训练同一个残差小分类器（8 epoch，batch 256，AdamW
+lr=5e-4，梯度裁剪 1.0），只替换其中的 FFN 模块。数据直接从 MNIST 官方
+IDX 镜像下载解析，不依赖 torchvision。
+
+```
+block        params    test_acc @8   step
+ffn          233,738     97.66%     5.0 ms
+fng-eager    149,610     93.76%     5.9 ms
+fng-triton   149,610     93.23%     5.1 ms
+```
+
+`fng-triton` 梯子的前向和反向均走融合 Triton kernel，训练曲线和
+`fng-eager` 高度一致（仅存在浮点舍入漂移）。在 `depth=5, L=16` 下 FNG
+只用 0.64x 参数量达到 ~93–94% 测试准确率；`depth=8` 在这个小规模下明显
+更难优化。
+
+运行方式：`TRITON_DEFAULT_BACKEND=cpu python mnist_train.py`。
 
 ## 测试
 
@@ -153,9 +174,10 @@ pytest -v          # 未安装 triton 时相关测试自动跳过
 ```
 cofrgenet_fng/        包本体
   layers.py           VanillaFFN、SwiGLUFFN、CoFrGeNetFNG、continuant_fraction
-  triton_ladder.py    融合 Triton kernel（可选，仅前向）
+  triton_ladder.py    融合 Triton 前向/反向 kernel（可选）、CoFrGeNetFNGTriton
 fng_vs_ffn.py         示例：FNG 对比 FFN 基线
 fng_triton.py         示例：Triton kernel 正确性 + 基准测试
+mnist_train.py        示例：MNIST 前向+反向训练测试
 tests/                pytest 测试套件
 docs/                 README 配图（make_figures.py 可重新生成）+ theory.md 理论分析
 ```
