@@ -1,22 +1,49 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "cofrgenet-fng"
-version = "0.1.0"
-description = "Unofficial PyTorch implementation of CoFrGeNet-FNG: non-expanding gated continued-fraction feed-forward layers (arXiv:2611.26835)"
+name = "cofrgenet-torch"
+version = "0.2.0"
+description = "PyTorch implementation of CoFrGeNet-FNG: non-expanding gated continued-fraction feed-forward layers (arXiv:2611.26835) with fused Triton fwd/bwd kernels"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "tpoisonooo" }]
+keywords = [
+  "continued-fraction",
+  "cofrgenet",
+  "cofrnet",
+  "ffn",
+  "transformer",
+  "pytorch",
+  "triton",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.10"
 dependencies = ["torch>=2.0"]
 
 [project.optional-dependencies]
+triton = ["triton>=3.0"]
 test = ["pytest>=7"]
 
 [project.urls]
 Repository = "https://github.com/tpoisonooo/fng"
+Issues = "https://github.com/tpoisonooo/fng/issues"
 Paper = "https://arxiv.org/abs/2611.26835"
 
 [tool.setuptools]
 packages = ["cofrgenet_fng"]
+
+[tool.setuptools.package-data]
+cofrgenet_fng = ["py.typed"]

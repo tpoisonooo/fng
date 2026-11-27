@@ -42,10 +42,15 @@ Parameter count: `2p² + L·p·(d+1) + L·p` vs. `2αp²` for a vanilla FFN or
 ## Install
 
 ```bash
-pip install -e .          # torch is the only hard dependency
+# from PyPI
+pip install cofrgenet-torch             # torch is the only hard dependency
+pip install "cofrgenet-torch[triton]"   # optional: fused Triton fwd+bwd (GPU)
+
+# or from source (this repo)
+pip install -e .
 ```
 
-Optional, for the fused Triton ladder kernel:
+Optional, for the fused Triton ladder kernels:
 
 ```bash
 # GPU

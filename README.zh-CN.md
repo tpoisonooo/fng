@@ -75,10 +75,15 @@ FNG 用四步替代这条路，核心思想是：**FFN 靠"升维摊开 + 激活
 ## 安装
 
 ```bash
-pip install -e .          # 唯一硬依赖是 torch
+# 从 PyPI 安装
+pip install cofrgenet-torch             # 唯一硬依赖是 torch
+pip install "cofrgenet-torch[triton]"   # 可选：融合 Triton 前向/反向（GPU）
+
+# 或从源码安装（本仓库）
+pip install -e .
 ```
 
-可选：融合 Triton 梯子 kernel：
+可选：融合 Triton 梯子 kernel（CPU 后端）：
 
 ```bash
 # GPU
