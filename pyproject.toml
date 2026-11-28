@@ -38,8 +38,8 @@ triton = ["triton>=3.0"]
 test = ["pytest>=7"]
 
 [project.urls]
-Repository = "https://github.com/tpoisonooo/fng"
-Issues = "https://github.com/tpoisonooo/fng/issues"
+Repository = "https://github.com/tpoisonooo/cofrgenet-torch"
+Issues = "https://github.com/tpoisonooo/cofrgenet-torch/issues"
 Paper = "https://arxiv.org/abs/2611.26835"
 
 [tool.setuptools]
