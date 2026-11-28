@@ -170,6 +170,7 @@ cofrgenet_fng/        the package
 fng_vs_ffn.py         example: FNG vs. FFN baselines
 fng_triton.py         example: Triton kernel correctness + benchmarks
 mnist_train.py        example: MNIST forward + backward training test
+examples/nanogpt/     nanoGPT GPT-2 Small integration (throughput + PPL study)
 tests/                pytest suite
 ```
 

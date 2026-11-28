@@ -201,6 +201,7 @@ cofrgenet_fng/        包本体
 fng_vs_ffn.py         示例：FNG 对比 FFN 基线
 fng_triton.py         示例：Triton kernel 正确性 + 基准测试
 mnist_train.py        示例：MNIST 前向+反向训练测试
+examples/nanogpt/     nanoGPT GPT-2 Small 接入（吞吐 + PPL 对齐配置实验）
 tests/                pytest 测试套件
 docs/                 README 配图（make_figures.py 可重新生成）+ theory.md 理论分析
 ```
