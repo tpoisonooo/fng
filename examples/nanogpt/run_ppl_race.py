@@ -285,6 +285,7 @@ def main():
     parser.add_argument("--exp-dir", default=os.path.join(REPO_ROOT, "experiments"))
     parser.add_argument("--render-dir", default=os.path.join(HERE, "results"))
     parser.add_argument("--only", default=None)
+    parser.add_argument("--screen", action="store_true", help="500-step diagnostic screen grid")
     args = parser.parse_args()
 
     sys.path.insert(0, args.nanogpt_dir)
@@ -294,17 +295,27 @@ def main():
     dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
     data = FixedBatches(args.data_dir, device=device)
 
-    specs = [
-        dict(block="ffn", L=0, d=0, lr=6e-4, max_steps=args.ffn_max_steps),
-        dict(block="fng", L=16, d=5, lr=3e-4, max_steps=args.fng_max_steps),
-        dict(block="fng", L=8, d=5, lr=6e-4, max_steps=args.fng_max_steps),
-    ]
+    if args.screen:
+        specs = [
+            dict(block="fng", L=8, d=5, lr=3e-4, max_steps=500, c_std=None),
+            dict(block="fng", L=64, d=5, lr=3e-4, max_steps=500, c_std=None),
+            dict(block="fng", L=128, d=5, lr=3e-4, max_steps=500, c_std=None),
+            dict(block="fng", L=32, d=5, lr=3e-4, max_steps=500, c_std=1.0),
+            dict(block="fng", L=32, d=4, lr=3e-4, max_steps=500, c_std=1.0),
+        ]
+    else:
+        specs = [
+            dict(block="ffn", L=0, d=0, lr=6e-4, max_steps=args.ffn_max_steps, c_std=None),
+            dict(block="fng", L=16, d=5, lr=3e-4, max_steps=args.fng_max_steps, c_std=None),
+            dict(block="fng", L=8, d=5, lr=6e-4, max_steps=args.fng_max_steps, c_std=None),
+        ]
     if args.only:
         specs = [s for s in specs if s["block"] in args.only.split(",")]
 
     for sp in specs:
         spec_lr = sp["lr"] if args.optimizer == "adamw" else args.muon_lr
-        run_name = f"gpt2small-{sp['block']}-L{sp['L']}d{sp['d']}-{args.optimizer}-lr{fmt_lr(spec_lr)}"
+        ctag = "" if sp.get("c_std") is None else f"-c{sp['c_std']}"
+        run_name = f"gpt2small-{sp['block']}-L{sp['L']}d{sp['d']}{ctag}-{args.optimizer}-lr{fmt_lr(spec_lr)}"
         if args.only and run_name not in args.only.split(","):
             continue
 
@@ -315,7 +326,7 @@ def main():
             cfg = GPTConfig(mlp_type="fng", fng_n_ladders=sp["L"], fng_depth=sp["d"], bias=True)
         model = GPT(cfg).to(device)
         if sp["block"] != "ffn":
-            calibrate_fng_init(model)
+            calibrate_fng_init(model, coeff_target_std=sp.get("c_std"))
         model = model.to(dtype)
 
         if args.optimizer == "adamw":

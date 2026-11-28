@@ -18,8 +18,12 @@ import torch
 
 
 @torch.no_grad()
-def calibrate_fng_init(model, target_std: float | None = None, tokens: int = 2048) -> list[float]:
-    """Rescale every MLPFNG.down.weight so the block output std ~= target_std."""
+def calibrate_fng_init(model, target_std: float | None = None, tokens: int = 2048, coeff_target_std: float | None = None) -> list[float]:
+    """Rescale every MLPFNG block's init. If coeff_target_std is given, first
+    scale coeffs.weight so ladder coefficients a_k have that std (e.g. 1.0 to
+    escape the eps clamp), then rescale down.weight to match FFN output std."""
+    import torch.nn.functional as F
+
     cfg = model.config
     if target_std is None:
         target_std = 0.02 * math.sqrt(cfg.n_embd) / math.sqrt(2 * cfg.n_layer)
@@ -31,6 +35,12 @@ def calibrate_fng_init(model, target_std: float | None = None, tokens: int = 204
     stds = []
     for blk in model.transformer.h:
         fng = blk.mlp.fng if hasattr(blk.mlp, "fng") else blk.mlp
+        if coeff_target_std is not None:
+            a, b = fng.gate_up(dummy).chunk(2, dim=-1)
+            z = (a * F.silu(b)).float()
+            c_std = fng.coeffs(z).float().std().item()
+            if c_std > 0:
+                fng.coeffs.weight.mul_(coeff_target_std / c_std)
         out = fng(dummy).float()
         cur_std = out.std().item()
         if cur_std > 0:

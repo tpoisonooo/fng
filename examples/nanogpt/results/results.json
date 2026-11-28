@@ -25,6 +25,19 @@
     "throughput_tok_per_sec": 115580.3,
     "optimizer": "muon"
   },
+  "gpt2small-fng-L128d5-muon-lr1.5e-2": {
+    "run_name": "gpt2small-fng-L128d5-muon-lr1.5e-2",
+    "n_params": 89470464,
+    "hit_target": false,
+    "final_step": 500,
+    "train_seconds_to_target": null,
+    "steps_to_target": null,
+    "tokens_to_target": null,
+    "best_val_loss": 10.33777904510498,
+    "best_ppl": 30877.376576481696,
+    "throughput_tok_per_sec": 139440.7,
+    "optimizer": "muon"
+  },
   "gpt2small-fng-L16d5-adamw-lr3.0e-4": {
     "run_name": "gpt2small-fng-L16d5-adamw-lr3.0e-4",
     "optimizer": "adamw",
@@ -51,6 +64,45 @@
     "throughput_tok_per_sec": 147715.1,
     "optimizer": "muon"
   },
+  "gpt2small-fng-L32d4-c1.0-muon-lr1.5e-2": {
+    "run_name": "gpt2small-fng-L32d4-c1.0-muon-lr1.5e-2",
+    "n_params": 82975104,
+    "hit_target": false,
+    "final_step": 500,
+    "train_seconds_to_target": null,
+    "steps_to_target": null,
+    "tokens_to_target": null,
+    "best_val_loss": 10.547635803222656,
+    "best_ppl": 38087.28594613554,
+    "throughput_tok_per_sec": 146071.8,
+    "optimizer": "muon"
+  },
+  "gpt2small-fng-L32d5-c1.0-muon-lr1.5e-2": {
+    "run_name": "gpt2small-fng-L32d5-c1.0-muon-lr1.5e-2",
+    "n_params": 83270400,
+    "hit_target": false,
+    "final_step": 500,
+    "train_seconds_to_target": null,
+    "steps_to_target": null,
+    "tokens_to_target": null,
+    "best_val_loss": 10.957249374389649,
+    "best_ppl": 57368.42675222827,
+    "throughput_tok_per_sec": 146309.2,
+    "optimizer": "muon"
+  },
+  "gpt2small-fng-L64d5-muon-lr1.5e-2": {
+    "run_name": "gpt2small-fng-L64d5-muon-lr1.5e-2",
+    "n_params": 85337088,
+    "hit_target": false,
+    "final_step": 500,
+    "train_seconds_to_target": null,
+    "steps_to_target": null,
+    "tokens_to_target": null,
+    "best_val_loss": 10.152741508483887,
+    "best_ppl": 25661.356688127842,
+    "throughput_tok_per_sec": 144250.7,
+    "optimizer": "muon"
+  },
   "gpt2small-fng-L8d5-adamw-lr6.0e-4": {
     "run_name": "gpt2small-fng-L8d5-adamw-lr6.0e-4",
     "optimizer": "adamw",
@@ -68,13 +120,13 @@
     "run_name": "gpt2small-fng-L8d5-muon-lr1.5e-2",
     "n_params": 81720384,
     "hit_target": false,
-    "final_step": 4500,
+    "final_step": 500,
     "train_seconds_to_target": null,
     "steps_to_target": null,
     "tokens_to_target": null,
-    "best_val_loss": 6.669446306228638,
-    "best_ppl": 787.959195556668,
-    "throughput_tok_per_sec": 148069.2,
+    "best_val_loss": 7.679396266937256,
+    "best_ppl": 2163.3133137386058,
+    "throughput_tok_per_sec": 147831.3,
     "optimizer": "muon"
   }
 }

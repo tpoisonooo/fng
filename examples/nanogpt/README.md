@@ -110,6 +110,43 @@ python examples/nanogpt/run_ppl_race.py /tmp/nanogpt \
   --data-dir /tmp/nanogpt/data/fineweb_slice --optimizer muon --muon-lr 0.015 --target-ppl 250
 ```
 
+### Additional ablation: can Muon + larger parameter count (`L`) push PPL down?
+
+We screened 5 FNG + Muon (`lr=1.5e-2`, calibrated output init) variants for
+500 steps on the same H20, including much wider ladder ensembles and unit-scale
+coefficient initialization:
+
+
+| FNG variant (500 steps, Muon) | Params | Best / Final PPL |
+|---|---|---|
+| FFN + Muon baseline (hits 250 at step 350) | 123.7M | **237.2** |
+| `L=8, d=5` | 81.7M | 2163.3 |
+| `L=64, d=5` (larger params) | 85.3M | 25661.4 (diverged) |
+| `L=128, d=5` (larger params) | 89.5M | 30877.4 (spiked to PPL 382K @step 100) |
+| `L=32, d=5, c=1.0` (unit-scale coeffs) | 83.3M | 57368.4 (stuck near random entropy) |
+| `L=32, d=4, c=1.0` (even depth + unit coeffs) | 83.0M | 38087.3 (stuck near random entropy) |
+
+**Why simply scaling up parameters or Muon LR does not make PPL fall:**
+- **Wider `L` increases pole exposure.** Each token passes through `L`
+  independent rational ladders; more ladders means a higher chance one
+  coefficient vector lands near a division pole (`K_d ≈ 0`), so widening
+  `L` makes early Muon updates *less* stable rather than smoothing the loss.
+- **Muon's scale-invariant orthogonal updates erase careful init ratios.**
+  Setting ladder coefficients to std≈1.0 requires compensating with a ~10x
+  smaller `down.weight`; Muon applies equal spectral-norm updates to both,
+  immediately destroying the init balance and collapsing the model toward
+  random-logit entropy.
+
+**What is actually needed for FNG's PPL to fall to FFN levels:**
+1. **The full pre-training scale of the paper** (~600K steps, ~300B tokens on
+   OWT at GPT-2 XL). Our 4500-step study (~150M tokens) is ~2000x smaller than
+   that regime, and no optimizer/width tweak bridges a 2000x budget gap.
+2. **Architectural stabilization of the fractional path** (if one wants
+   FNG-like efficiency at short budgets): e.g., a zero-initialized learnable
+   gate `out = Linear(z) + α·frac` or a smooth denominator clamp that avoids
+   the sign jump across `K_d = 0`. These change the paper's exact formulation,
+   so they are out of scope for this faithful implementation.
+
 ## Reproduce
 
 ```bash
