@@ -12,6 +12,8 @@ from cofrgenet_fng import (
     ladder_forward,
 )
 
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+
 
 def naive_fraction(A: torch.Tensor) -> torch.Tensor:
     """Direct recursive evaluation of f~ (d divisions, for checking only)."""
@@ -78,7 +80,7 @@ def test_deep_ladder_gradients_finite(d):
 @pytest.mark.parametrize("d", [1, 2, 5, 8])
 def test_triton_ladder_matches_eager(d):
     torch.manual_seed(0)
-    c = torch.randn(4096, 8, d + 1) * 2
+    c = torch.randn(4096, 8, d + 1, device=DEVICE) * 2
     ref = c[..., 0] + continuant_fraction(c[..., 1:], eps=0.1)
     got = ladder_forward(c, eps=0.1)
     # near a pole |f~| is huge and both fp32 evaluations carry ~1e-4 noise,
@@ -92,9 +94,9 @@ def test_triton_ladder_matches_eager(d):
 @pytest.mark.parametrize("eps", [0.1, 2.0])  # 2.0 exercises the clamped branch
 def test_triton_backward_matches_eager(d, eps):
     torch.manual_seed(0)
-    c = (torch.randn(64, 8, d + 1) * 1.5).requires_grad_(True)
+    c = (torch.randn(64, 8, d + 1, device=DEVICE) * 1.5).requires_grad_(True)
     c_ref = c.detach().clone().requires_grad_(True)
-    g = torch.randn(64, 8)
+    g = torch.randn(64, 8, device=DEVICE)
 
     # eager reference (autograd through continuant recursion + log/exp)
     out_ref = c_ref[..., 0] + continuant_fraction(c_ref[..., 1:], eps=eps)
@@ -114,11 +116,11 @@ def test_triton_backward_matches_eager(d, eps):
 @pytest.mark.parametrize("d", [1, 2, 5, 8])
 def test_triton_backward_clamped_denominator(d):
     """Tiny nonzero coefficients: |den| << eps exercises the clamp branch."""
-    c = torch.randn(128, 4, d + 1).requires_grad_(True)
+    c = torch.randn(128, 4, d + 1, device=DEVICE).requires_grad_(True)
     with torch.no_grad():
         c[..., 1:] *= 1e-6
     c_ref = c.detach().clone().requires_grad_(True)
-    g = torch.randn(128, 4)
+    g = torch.randn(128, 4, device=DEVICE)
 
     (c_ref[..., 0] + continuant_fraction(c_ref[..., 1:], eps=0.1)).backward(g)
     ladder_apply(c, eps=0.1).backward(g)
@@ -132,8 +134,8 @@ def test_triton_backward_at_zero_numerator():
     """d=2, a1=a2=0 -> num=a2=0, den=1, so frac=a2 and d frac/d a2 = 1.
     (eager autograd returns 0 at a2=0 only because torch.abs(0).grad == 0;
     the analytic adjoint gives the true derivative of num / den_c.)"""
-    c = torch.zeros(16, 4, 3, requires_grad=True)
-    g = torch.randn(16, 4)
+    c = torch.zeros(16, 4, 3, device=DEVICE, requires_grad=True)
+    g = torch.randn(16, 4, device=DEVICE)
     ladder_apply(c, eps=0.1).backward(g)
     assert torch.allclose(c.grad[..., 0], g)
     assert torch.allclose(c.grad[..., 1], torch.zeros_like(g))
@@ -143,11 +145,11 @@ def test_triton_backward_at_zero_numerator():
 @pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
 def test_triton_module_matches_eager_module():
     torch.manual_seed(0)
-    eager = CoFrGeNetFNG(64, n_ladders=8, depth=5)
-    fast = CoFrGeNetFNGTriton(64, n_ladders=8, depth=5)
+    eager = CoFrGeNetFNG(64, n_ladders=8, depth=5).to(DEVICE)
+    fast = CoFrGeNetFNGTriton(64, n_ladders=8, depth=5).to(DEVICE)
     fast.load_state_dict(eager.state_dict())
 
-    x = torch.randn(16, 7, 64)
+    x = torch.randn(16, 7, 64, device=DEVICE)
     y_ref = eager(x)
     y = fast(x)
     assert torch.allclose(y, y_ref, rtol=1e-3, atol=1e-3)
@@ -161,3 +163,42 @@ def test_triton_module_matches_eager_module():
             n1,
             (p1.grad - p2.grad).abs().max().item(),
         )
+
+
+@pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_triton_mixed_precision_fwd_bwd(dtype):
+    """bf16/fp16 storage keeps native dtype; fp32 internal math is compared
+    against the exact evaluation of the SAME quantized coefficients."""
+    torch.manual_seed(0)
+    c_low = (torch.randn(64, 8, 6, device=DEVICE) * 1.5).to(dtype).requires_grad_(True)
+    c_ref = c_low.detach().float().requires_grad_(True)
+    g32 = torch.randn(64, 8, device=DEVICE)
+
+    out_ref = c_ref[..., 0] + continuant_fraction(c_ref[..., 1:], eps=0.1)
+    out_ref.backward(g32)
+
+    out = ladder_apply(c_low, eps=0.1)
+    assert out.dtype == dtype
+    out.backward(g32.to(dtype))
+    assert c_low.grad.dtype == dtype
+    assert torch.isfinite(c_low.grad.float()).all()
+
+    tol = 3e-2 if dtype == torch.bfloat16 else 5e-3
+    fwd_err = ((out.float() - out_ref).abs() / out_ref.abs().clamp_min(1.0)).max()
+    bwd_err = ((c_low.grad.float() - c_ref.grad).abs() / c_ref.grad.abs().clamp_min(1.0)).max()
+    assert fwd_err < tol, fwd_err
+    assert bwd_err < tol, bwd_err
+
+
+@pytest.mark.skipif(not HAS_TRITON, reason="triton not installed")
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_triton_module_mixed_precision(dtype):
+    m = CoFrGeNetFNGTriton(64, n_ladders=8, depth=5).to(DEVICE).to(dtype)
+    x = torch.randn(16, 7, 64, device=DEVICE, dtype=dtype)
+    y = m(x)
+    assert y.dtype == dtype
+    y.float().pow(2).mean().backward()
+    for name, p in m.named_parameters():
+        assert p.grad is not None, name
+        assert torch.isfinite(p.grad.float()).all(), name

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cofrgenet-torch"
-version = "0.2.0"
+version = "0.2.1"
 description = "PyTorch implementation of CoFrGeNet-FNG: non-expanding gated continued-fraction feed-forward layers (arXiv:2611.26835) with fused Triton fwd/bwd kernels"
 readme = "README.md"
 license = "MIT"

@@ -115,6 +115,25 @@ level the p→2p GEMM dominates and the difference is within noise):
 Run it with `TRITON_DEFAULT_BACKEND=cpu python fng_triton.py` (or on a GPU,
 plain `python fng_triton.py`).
 
+### GPU results (NVIDIA H20, forward + backward)
+
+The fused Triton kernels support `float32`, `bfloat16`, and `float16` storage
+with fp32 internal accumulation (stable near poles). Measured per FFN-style
+block on a single H20 (`p=768, B=8, S=4096, L=5, d=5`):
+
+```
+precision         FFN   FNG-eager  FNG-triton  speedup
+fp32          26.49 ms     7.20 ms      6.98 ms    3.79x
+fp32+tf32     12.42 ms     4.32 ms      4.11 ms    3.02x
+bf16           6.59 ms     2.76 ms      2.56 ms    2.58x
+fp16           6.55 ms     2.91 ms      2.60 ms    2.52x
+```
+
+bf16 scaling (`L=8, d=5`): at `p=2048` the speedup is **3.68x**; at `p=4096`
+(**4.35x**: 81.28 ms → 18.67 ms) the FNG block stays >4x faster than FFN.
+Inside the FNG block, >90% of the remaining time is the `p → 2p` `gate_up`
+GEMM handled by cuBLAS; the ladder itself runs in ~20 µs.
+
 ### `mnist_train.py` — MNIST forward + backward training test
 
 End-to-end training on CPU (8 epochs, batch 256, AdamW lr=5e-4, grad clip 1.0)

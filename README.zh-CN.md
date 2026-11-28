@@ -147,6 +147,24 @@ CoFrGeNetFNG (L=8, d=8)         1,243,464    0.26x    74.09 ms
 运行方式：`TRITON_DEFAULT_BACKEND=cpu python fng_triton.py`（GPU 上直接
 `python fng_triton.py`）。
 
+### GPU 实测（NVIDIA H20，前向+反向）
+
+Triton kernel 支持 `float32` / `bfloat16` / `float16` 原生存储，内部用
+fp32 累加以保证极点附近的数值稳定。单张 H20 上单个 FFN 模块前向+反向
+实测（`p=768, B=8, S=4096, L=5, d=5`）：
+
+```
+precision         FFN   FNG-eager  FNG-triton  speedup
+fp32          26.49 ms     7.20 ms      6.98 ms    3.79x
+fp32+tf32     12.42 ms     4.32 ms      4.11 ms    3.02x
+bf16           6.59 ms     2.76 ms      2.56 ms    2.58x
+fp16           6.55 ms     2.91 ms      2.60 ms    2.52x
+```
+
+bf16 下扩大模型（`L=8, d=5`）：`p=2048` 时加速 **3.68x**；`p=4096` 时
+（**81.28 ms → 18.67 ms，4.35x**）仍保持 4 倍以上加速。FNG 内部耗时
+90% 以上来自 cuBLAS 的 `p → 2p` 门控 GEMM，梯子本身只需 ~20 µs。
+
 ### `mnist_train.py` —— MNIST 前向+反向训练测试
 
 在 CPU 上端到端训练同一个残差小分类器（8 epoch，batch 256，AdamW

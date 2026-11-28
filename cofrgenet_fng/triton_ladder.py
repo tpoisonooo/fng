@@ -111,8 +111,8 @@ if HAS_TRITON:
 
     @triton.jit
     def _ladder_kernel(
-        c_ptr,  # (N, D1) fp32: per ladder [a0, a_1, ..., a_d]
-        out_ptr,  # (N,) fp32
+        c_ptr,  # (N, D1) {fp32, bf16, fp16}: per ladder [a0, a_1, ..., a_d]
+        out_ptr,  # (N,) same dtype as c_ptr
         eps,
         N,
         D1: tl.constexpr,  # d + 1
@@ -122,23 +122,26 @@ if HAS_TRITON:
         mask = rows < N
         base = c_ptr + rows * D1
 
-        a0 = tl.load(base + 0, mask=mask, other=0.0)
+        # mixed precision: load in native dtype, compute in fp32 (stable near
+        # poles), cast back on store
+        a0 = tl.load(base + 0, mask=mask, other=0.0).to(tl.float32)
 
         # continuant recursion K_k = a_{d-k+1} * K_{k-1} + K_{k-2}, from a_d up
         Km2 = tl.full((BLOCK,), 1.0, tl.float32)  # K_0
-        Km1 = tl.load(base + (D1 - 1), mask=mask, other=0.0)  # K_1 = a_d
+        Km1 = tl.load(base + (D1 - 1), mask=mask, other=0.0).to(tl.float32)  # K_1 = a_d
         for k in tl.static_range(2, D1):
-            a = tl.load(base + (D1 - k), mask=mask, other=0.0)
+            a = tl.load(base + (D1 - k), mask=mask, other=0.0).to(tl.float32)
             Km2, Km1 = Km1, a * Km1 + Km2
         # Km1 = K_d(a_1..a_d), Km2 = K_{d-1}(a_2..a_d)
 
-        tl.store(out_ptr + rows, a0 + _frac_logexp(Km2, Km1, eps), mask=mask)
+        out = a0 + _frac_logexp(Km2, Km1, eps)
+        tl.store(out_ptr + rows, out.to(out_ptr.dtype.element_ty), mask=mask)
 
     @triton.jit
     def _ladder_bwd_kernel(
-        c_ptr,  # (N, D1) fp32: forward coefficients [a0, a_1, ..., a_d]
-        g_ptr,  # (N,) fp32: upstream grad w.r.t. ladder output
-        dc_ptr,  # (N, D1) fp32: output grads w.r.t. c
+        c_ptr,  # (N, D1) {fp32, bf16, fp16}: forward coefficients
+        g_ptr,  # (N,) same dtype: upstream grad w.r.t. ladder output
+        dc_ptr,  # (N, D1) same dtype: output grads w.r.t. c
         eps,
         N,
         D1: tl.constexpr,
@@ -147,14 +150,14 @@ if HAS_TRITON:
         rows = tl.program_id(0) * BLOCK + tl.arange(0, BLOCK)
         mask = rows < N
         base = c_ptr + rows * D1
-        g = tl.load(g_ptr + rows, mask=mask, other=0.0)
+        g = tl.load(g_ptr + rows, mask=mask, other=0.0).to(tl.float32)
 
         # 1) recompute forward to get num, den, frac (d <= 8: cheap recompute,
-        #    saves storing O(d) activations)
+        #    saves storing O(d) activations); all math in fp32
         Km2 = tl.full((BLOCK,), 1.0, tl.float32)
-        Km1 = tl.load(base + (D1 - 1), mask=mask, other=0.0)  # K_1 = a_d
+        Km1 = tl.load(base + (D1 - 1), mask=mask, other=0.0).to(tl.float32)  # K_1 = a_d
         for k in tl.static_range(2, D1):
-            a = tl.load(base + (D1 - k), mask=mask, other=0.0)
+            a = tl.load(base + (D1 - k), mask=mask, other=0.0).to(tl.float32)
             Km2, Km1 = Km1, a * Km1 + Km2
         num, den = Km2, Km1
         frac = _frac_logexp(num, den, eps)  # frac = num / den_c
@@ -169,55 +172,75 @@ if HAS_TRITON:
             0.0,
         )
 
-        tl.store(dc_ptr + rows * D1 + 0, g, mask=mask)  # d a_0
+        tl.store(
+            dc_ptr + rows * D1 + 0,
+            g.to(dc_ptr.dtype.element_ty),
+            mask=mask,
+        )  # d a_0
 
         if D1 == 2:
             # d = 1: num = K_0 = 1 is constant, den = a_1
-            tl.store(dc_ptr + rows * D1 + 1, d_den, mask=mask)
+            tl.store(
+                dc_ptr + rows * D1 + 1,
+                d_den.to(dc_ptr.dtype.element_ty),
+                mask=mask,
+            )
         else:
             # 3) reverse adjoint of Km2, Km1 = Km1, a * Km1 + Km2
             A2, A1 = d_num, d_den
             for i in range(0, D1 - 2):
                 rev_k = (D1 - 1) - i  # reverse step: d, d-1, ..., 2
-                a = tl.load(base + (D1 - rev_k), mask=mask, other=0.0)
+                a = tl.load(base + (D1 - rev_k), mask=mask, other=0.0).to(tl.float32)
 
                 # recompute state (v2, v1) before step rev_k (steps 2 .. rev_k-1)
                 v2 = tl.full((BLOCK,), 1.0, tl.float32)
-                v1 = tl.load(base + (D1 - 1), mask=mask, other=0.0)
+                v1 = tl.load(base + (D1 - 1), mask=mask, other=0.0).to(tl.float32)
                 for jj in range(0, rev_k - 2):
-                    aj = tl.load(base + (D1 - jj - 2), mask=mask, other=0.0)
+                    aj = tl.load(base + (D1 - jj - 2), mask=mask, other=0.0).to(tl.float32)
                     v2, v1 = v1, aj * v1 + v2
 
                 d_a = A1 * v1  # grad w.r.t. the coefficient consumed at step rev_k
-                tl.store(dc_ptr + rows * D1 + (D1 - rev_k), d_a, mask=mask)
+                tl.store(
+                    dc_ptr + rows * D1 + (D1 - rev_k),
+                    d_a.to(dc_ptr.dtype.element_ty),
+                    mask=mask,
+                )
                 A2, A1 = A1, A1 * a + A2
-            tl.store(dc_ptr + rows * D1 + (D1 - 1), A1, mask=mask)  # d a_d
+            tl.store(
+                dc_ptr + rows * D1 + (D1 - 1),
+                A1.to(dc_ptr.dtype.element_ty),
+                mask=mask,
+            )  # d a_d
+
+    def _prep(c: torch.Tensor) -> torch.Tensor:
+        if c.dtype not in (torch.float32, torch.bfloat16, torch.float16):
+            raise TypeError(
+                f"ladder kernels support float32/float16/bfloat16, got {c.dtype}"
+            )
+        return c.reshape(-1, c.shape[-1]).contiguous()
 
     def ladder_forward(c: torch.Tensor, eps: float = 0.1) -> torch.Tensor:
         """c: (..., L, d+1) coefficients [a0, a_1..a_d] -> (..., L) outputs."""
-        shape = c.shape
-        c2 = c.reshape(-1, shape[-1]).contiguous().float()
-        n = c2.shape[0]
-        out = torch.empty(n, device=c2.device, dtype=torch.float32)
+        c2 = _prep(c)
+        out = torch.empty(c2.shape[0], device=c.device, dtype=c.dtype)
         block = 256
-        _ladder_kernel[(triton.cdiv(n, block),)](
-            c2, out, eps, n, D1=shape[-1], BLOCK=block
+        _ladder_kernel[(triton.cdiv(c2.shape[0], block),)](
+            c2, out, eps, c2.shape[0], D1=c.shape[-1], BLOCK=block
         )
-        return out.reshape(shape[:-1])
+        return out.reshape(c.shape[:-1])
 
     def ladder_backward(
         c: torch.Tensor, grad_out: torch.Tensor, eps: float = 0.1
     ) -> torch.Tensor:
         """Gradient w.r.t. c for ladder_forward; grad_out has shape (..., L)."""
-        shape = c.shape
-        c2 = c.reshape(-1, shape[-1]).contiguous().float()
-        g2 = grad_out.reshape(-1).contiguous().float()
+        c2 = _prep(c)
+        g2 = grad_out.to(c.dtype).reshape(-1).contiguous()
         dc = torch.empty_like(c2)
         block = 256
         _ladder_bwd_kernel[(triton.cdiv(c2.shape[0], block),)](
-            c2, g2, dc, eps, c2.shape[0], D1=shape[-1], BLOCK=block
+            c2, g2, dc, eps, c2.shape[0], D1=c.shape[-1], BLOCK=block
         )
-        return dc.reshape(shape)
+        return dc.reshape(c.shape)
 
     class _LadderTritonFn(torch.autograd.Function):
         @staticmethod

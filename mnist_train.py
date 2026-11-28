@@ -110,10 +110,11 @@ class MnistNet(nn.Module):
 
 
 @torch.no_grad()
-def evaluate(model, loader):
+def evaluate(model, loader, device):
     model.eval()
     correct, total = 0, 0
     for x, y in loader:
+        x, y = x.to(device), y.to(device)
         correct += (model(x).argmax(1) == y).sum().item()
         total += y.numel()
     return correct / total
@@ -140,7 +141,7 @@ def train(name, block, p, train_set, test_set, epochs, batch_size, lr, device):
             opt.step()
             total_loss += loss.item()
             n_steps += 1
-        acc = evaluate(model, test_loader)
+        acc = evaluate(model, test_loader, device)
         ms = (time.perf_counter() - t0) / n_steps * 1e3
         print(
             f"epoch {epoch}: loss={total_loss / n_steps:.4f}  "

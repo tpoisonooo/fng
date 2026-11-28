@@ -29,6 +29,10 @@ from cofrgenet_fng import (
 )
 
 
+def _device():
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
 def check_correctness():
     print("=" * 72)
     print("[1] Triton ladder vs eager continuant_fraction")
@@ -36,7 +40,7 @@ def check_correctness():
     torch.manual_seed(0)
     worst = 0.0
     for d in (1, 2, 5, 8):
-        c = torch.randn(4096, 8, d + 1) * 2  # (N, L, d+1), fp32
+        c = torch.randn(4096, 8, d + 1, device=_device()) * 2  # fp32
         ref = c[..., 0] + continuant_fraction(c[..., 1:], eps=0.1)
         got = ladder_forward(c, eps=0.1)
         # near a pole |f~| is huge and both fp32 evaluations carry ~1e-4
@@ -51,9 +55,13 @@ def check_correctness():
 def _time(fn, iters=50):
     for _ in range(3):  # warmup
         fn()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     t0 = time.perf_counter()
     for _ in range(iters):
         fn()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
     return (time.perf_counter() - t0) / iters * 1e3
 
 
@@ -65,7 +73,7 @@ def bench_ladder():
         print("interpreter mode (TRITON_INTERPRET=1): correctness only, skip timing\n")
         return
     for B, S, L, d in ((16, 256, 8, 8), (64, 1024, 16, 8)):
-        c = torch.randn(B, S, L, d + 1)
+        c = torch.randn(B, S, L, d + 1, device=_device())
         n = B * S * L
         ms_eager = _time(lambda: c[..., 0] + continuant_fraction(c[..., 1:], eps=0.1))
         ms_fused = _time(lambda: ladder_forward(c, eps=0.1))
@@ -85,8 +93,8 @@ def bench_module():
         print("interpreter mode: skip timing\n")
         return
     p, L, d = 768, 8, 8
-    m = CoFrGeNetFNG(p, L, d)
-    x = torch.randn(16, 256, p)
+    m = CoFrGeNetFNG(p, L, d).to(_device())
+    x = torch.randn(16, 256, p, device=_device())
 
     def triton_forward(x):
         a, b = m.gate_up(x).chunk(2, dim=-1)
