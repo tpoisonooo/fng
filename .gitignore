@@ -5,7 +5,8 @@ __pycache__/
 build/
 dist/
 
-# local environments and downloaded toolchains
+# local environments, downloaded toolchains and experiment logs
 .venv/
 third_party/
+experiments/
 *.whl

@@ -1,0 +1,80 @@
+{
+  "gpt2small-ffn-L0d0-adamw-lr6.0e-4": {
+    "run_name": "gpt2small-ffn-L0d0-adamw-lr6.0e-4",
+    "optimizer": "adamw",
+    "n_params": 123692544,
+    "hit_target": true,
+    "steps_to_target": 600,
+    "train_seconds_to_target": 159.07,
+    "tokens_to_target": 19660800,
+    "final_step": 600,
+    "best_val_loss": 5.470642690658569,
+    "best_ppl": 237.6128552609629,
+    "throughput_tok_per_sec": 123598.4
+  },
+  "gpt2small-ffn-L0d0-muon-lr1.5e-2": {
+    "run_name": "gpt2small-ffn-L0d0-muon-lr1.5e-2",
+    "n_params": 123689472,
+    "hit_target": true,
+    "final_step": 350,
+    "train_seconds_to_target": 99.228,
+    "steps_to_target": 350,
+    "tokens_to_target": 11468800,
+    "best_val_loss": 5.46893967628479,
+    "best_ppl": 237.2085415268269,
+    "throughput_tok_per_sec": 115580.3,
+    "optimizer": "muon"
+  },
+  "gpt2small-fng-L16d5-adamw-lr3.0e-4": {
+    "run_name": "gpt2small-fng-L16d5-adamw-lr3.0e-4",
+    "optimizer": "adamw",
+    "n_params": 82819336,
+    "hit_target": false,
+    "steps_to_target": null,
+    "train_seconds_to_target": null,
+    "tokens_to_target": null,
+    "final_step": 4500,
+    "best_val_loss": 7.275057172775268,
+    "best_ppl": 1443.8337377701405,
+    "throughput_tok_per_sec": 158481.6
+  },
+  "gpt2small-fng-L16d5-muon-lr1.5e-2": {
+    "run_name": "gpt2small-fng-L16d5-muon-lr1.5e-2",
+    "n_params": 82237056,
+    "hit_target": false,
+    "final_step": 4500,
+    "train_seconds_to_target": null,
+    "steps_to_target": null,
+    "tokens_to_target": null,
+    "best_val_loss": 6.739763250350952,
+    "best_ppl": 845.3605733387126,
+    "throughput_tok_per_sec": 147715.1,
+    "optimizer": "muon"
+  },
+  "gpt2small-fng-L8d5-adamw-lr6.0e-4": {
+    "run_name": "gpt2small-fng-L8d5-adamw-lr6.0e-4",
+    "optimizer": "adamw",
+    "n_params": 81716616,
+    "hit_target": false,
+    "steps_to_target": null,
+    "train_seconds_to_target": null,
+    "tokens_to_target": null,
+    "final_step": 4500,
+    "best_val_loss": 7.010483427047729,
+    "best_ppl": 1108.1901044991473,
+    "throughput_tok_per_sec": 159080.0
+  },
+  "gpt2small-fng-L8d5-muon-lr1.5e-2": {
+    "run_name": "gpt2small-fng-L8d5-muon-lr1.5e-2",
+    "n_params": 81720384,
+    "hit_target": false,
+    "final_step": 4500,
+    "train_seconds_to_target": null,
+    "steps_to_target": null,
+    "tokens_to_target": null,
+    "best_val_loss": 6.669446306228638,
+    "best_ppl": 787.959195556668,
+    "throughput_tok_per_sec": 148069.2,
+    "optimizer": "muon"
+  }
+}

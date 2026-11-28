@@ -61,6 +61,55 @@ then FNG converges more slowly than FFN at short budgets (200-step screening):
    favors wide FFNs, while FNG trades early convergence for parameter
    efficiency and throughput.
 
+## PPL-vs-wall-clock race and Muon ablation
+
+Instead of comparing PPL at a fixed step budget, `run_ppl_race.py` stops each
+run when it reaches **the same target PPL (250)** on a fixed validation subset,
+recording pure training wall-clock time, steps, and tokens. Experiment runs are
+archived under `experiments/<run_name>/` (gitignored) and merged automatically
+into `examples/nanogpt/results/` (`RESULTS.md`, `ppl_vs_time.jpg`,
+`ppl_vs_tokens.jpg`).
+
+Single H20, same GPT-2 Small config (`batch=32, block=1024, bf16`):
+
+
+| Run | Steps to PPL 250 | Train seconds to PPL 250 | Throughput | Best PPL |
+|---|---|---|---|---|
+| FFN + AdamW (`lr=6e-4`) | 600 | 159.1 s | 123.6K tok/s | 237.6 |
+| **FFN + Muon (`lr=1.5e-2`)** | **350** | **99.2 s** | 115.6K tok/s | 237.2 |
+| FNG `L=16, d=5` + AdamW (`lr=3e-4`) | not hit (4500+) | — | 158.5K tok/s | 1443.8 |
+| FNG `L=16, d=5` + Muon (`lr=1.5e-2`) | not hit (4500+) | — | 147.7K tok/s | 845.4 |
+| FNG `L=8, d=5` + AdamW (`lr=6e-4`) | not hit (4500+) | — | 159.1K tok/s | 1108.2 |
+| FNG `L=8, d=5` + Muon (`lr=1.5e-2`) | not hit (4500+) | — | 148.1K tok/s | 788.0 |
+
+![PPL vs time](results/ppl_vs_time.jpg)
+
+**Findings from the optimizer comparison:**
+1. **Muon is a clear win for FFN** — 1.6x less wall-clock to hit the same PPL
+   (99.2 s vs 159.1 s), even after paying the Newton-Schulz orthogonalization
+   cost per step.
+2. **Muon helps FNG substantially but does not rescue parity** — it roughly
+   halves FNG's PPL gap at 4500 steps (1444 → 845 for `L=16`, 1108 → 788 for
+   `L=8`) with much cleaner curves, yet FNG plateaus around PPL ~800 while
+   FFN crossed 250 in a tenth of the time.
+3. **The 27% FNG throughput advantage does not compensate for its much slower
+   convergence at this training scale.** Better conditioning alone is not
+   enough — the continued-fraction trunk's early expressivity/init bottleneck
+   remains the binding constraint, and reaching FFN PPL requires the full
+   large-scale pre-training budget used by the paper.
+
+Run the ablation:
+
+```bash
+# AdamW variants
+python examples/nanogpt/run_ppl_race.py /tmp/nanogpt \
+  --data-dir /tmp/nanogpt/data/fineweb_slice --optimizer adamw --target-ppl 250
+
+# Muon variants (hidden 2D weights on Muon, embeddings/LN/biases on AdamW)
+python examples/nanogpt/run_ppl_race.py /tmp/nanogpt \
+  --data-dir /tmp/nanogpt/data/fineweb_slice --optimizer muon --muon-lr 0.015 --target-ppl 250
+```
+
 ## Reproduce
 
 ```bash
